@@ -4,8 +4,9 @@ use \Illuminate\Database\Eloquent\Collection;
 use \Illuminate\Database\Query\Expression;
 use \Illuminate\Http\JsonResponse;
 use \Illuminate\Support\Facades\Config;
-use \Illuminate\Support\Facades\Input;
+use \Illuminate\Support\Facades\Request;
 use \Illuminate\Support\Facades\Response;
+use \Illuminate\Database\Query\Builder as BaseBuilder;
 use \Marcelgwerder\ApiHandler\ApiHandler;
 
 class ApiHandlerTest extends PHPUnit_Framework_TestCase
@@ -75,7 +76,7 @@ class ApiHandlerTest extends PHPUnit_Framework_TestCase
         $input = m::mock('InputMock');
         $input->shouldReceive('get')->once()
               ->with()->andReturn($this->params);
-        Input::swap($input);
+        Request::swap($input);
 
         //Mock the response
         $response = m::mock('ResponseMock');
@@ -88,12 +89,18 @@ class ApiHandlerTest extends PHPUnit_Framework_TestCase
             ->with('Something to search')->andReturn('Something to search');
 
         //Mock the connection the same way as laravel does:
-        //tests/Database/DatabaseEloquentBuilderTest.php#L408-L418 (mockConnectionForModel($model, $database))
-        $grammar = new Illuminate\Database\Query\Grammars\MySqlGrammar;
-        $processor = new Illuminate\Database\Query\Processors\MySqlProcessor;
+        //tests/Database/DatabaseEloquentBuilderTest.php#L1227-L1239 (mockConnectionForModel($model, $database))
+        $grammar = new Illuminate\Database\Query\Grammars\Grammar;
+        $processor = new Illuminate\Database\Query\Processors\Processor;
+
         $connection = m::mock('Illuminate\Database\ConnectionInterface', ['getQueryGrammar' => $grammar, 'getPostProcessor' => $processor]);
-        $connection->shouldReceive('select')->once()->with('select * from `posts`', [])->andReturn($this->data);
-        $connection->shouldReceive('select')->once()->with('select * from `posts`', [], true)->andReturn($this->data);
+        $connection->shouldReceive('query')->andReturnUsing(function () use ($connection, $grammar, $processor) {
+            return new BaseBuilder($connection, $grammar, $processor);
+        });
+        $connection->shouldReceive('getName')->andReturn('myConnection');
+        
+        $connection->shouldReceive('select')->once()->with('select * from "posts"', [])->andReturn($this->data);
+        $connection->shouldReceive('select')->once()->with('select * from "posts"', [], true)->andReturn($this->data);
         $connection->shouldReceive('raw')->once()->with('MATCH(posts.title,posts.description) AGAINST("Something to search" IN BOOLEAN MODE) as `_score`')
                    ->andReturn($this->fulltextSelectExpression);
         $connection->shouldReceive('getPdo')->once()->andReturn($pdo);

@@ -372,12 +372,15 @@ class Parser
                 if (!$this->isRelation($previousModel, $part)) {
                     throw new ApiHandlerException('UnknownResourceRelation', ['relation' => $part]);
                 }
-
                 $relation = call_user_func([$previousModel, $part]);
                 $relationType = $this->getRelationType($relation);
 
                 if ($relationType === 'BelongsTo') {
-                    $firstKey = $relation->getQualifiedForeignKey();
+                    // Compatibility for Laravel < 5.8
+                    $firstKey = (method_exists($relation, 'getQualifiedForeignKeyName'))
+                        ? $relation->getQualifiedForeignKeyName()
+                        : $relation->getQualifiedForeignKey();
+                        
                     $secondKey = $relation->getQualifiedParentKeyName();
                 } else if ($relationType === 'HasMany' || $relationType === 'HasOne') {
                     $firstKey = $relation->getQualifiedParentKeyName();
@@ -608,7 +611,7 @@ class Parser
             $this->query->whereRaw('MATCH('.implode(',', $fullTextSearchColumns).') AGAINST("'.$qParam.'" IN BOOLEAN MODE)');
 
             //Add the * to the selects because of the score column
-            if (count($this->query->columns) == 0) {
+            if (!$this->query->columns || count($this->query->columns) == 0) {
                 $this->query->addSelect('*');
             }
 
