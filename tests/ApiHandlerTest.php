@@ -1,5 +1,7 @@
 <?php
+
 use Mockery as m;
+use Illuminate\Database\ConnectionInterface;
 use \Illuminate\Database\Eloquent\Collection;
 use \Illuminate\Database\Query\Expression;
 use Illuminate\Database\Query\Builder as BaseBuilder;
@@ -11,6 +13,19 @@ use \Marcelgwerder\ApiHandler\ApiHandler;
 
 class ApiHandlerTest extends PHPUnit_Framework_TestCase
 {
+    /**
+     * @var \string[][]
+     */
+    private $testData;
+    /**
+     * @var array
+     */
+    private $params;
+    /**
+     * @var \Illuminate\Database\Query\Expression
+     */
+    private $fulltextSelectExpression;
+
     public function setUp()
     {
         parent::setUp();
@@ -18,36 +33,36 @@ class ApiHandlerTest extends PHPUnit_Framework_TestCase
         //Test parameters
         $this->params = [
             //Fields
-            '_fields' => 'title,description,comments.title,user.first_name',
+          '_fields' => 'title,description,comments.title,user.first_name',
             //Filters
-            'title-lk' => 'Example Title|Another Title',
-            'description-lk' => '*aaa*bbb*',
-            'title' => 'Example Title',
-            'title-not-lk' => 'Example Title',
-            'title-not' => 'Example Title|Another Title',
-            'id-min' => 5,
-            'id-max' => 6,
-            'id-gt' => 7,
-            'id-st' => 8,
-            'id-in' => '1,2',
-            'id-not-in' => '3,4',
+          'title-lk' => 'Example Title|Another Title',
+          'description-lk' => '*aaa*bbb*',
+          'title' => 'Example Title',
+          'title-not-lk' => 'Example Title',
+          'title-not' => 'Example Title|Another Title',
+          'id-min' => 5,
+          'id-max' => 6,
+          'id-gt' => 7,
+          'id-st' => 8,
+          'id-in' => '1,2',
+          'id-not-in' => '3,4',
             //Pagination
-            '_limit' => 5,
-            '_offset' => 10,
+          '_limit' => 5,
+          '_offset' => 10,
             //With
-            '_with' => 'comments.user',
+          '_with' => 'comments.user',
             //Sort
-            '_sort' => '-title,first_name,comments.created_at',
+          '_sort' => '-title,first_name,comments.created_at',
             //Config
-            '_config' => 'mode-default,meta-filter-count,meta-total-count',
+          '_config' => 'mode-default,meta-filter-count,meta-total-count',
         ];
 
         $this->fulltextSelectExpression = new Expression('MATCH(posts.title,posts.description) AGAINST("Something to search" IN BOOLEAN MODE) as `_score`');
 
         //Test data
-        $this->data = [
-            ['foo' => 'A1', 'bar' => 'B1'],
-            ['foo' => 'A2', 'bar' => 'B2'],
+        $this->testData = [
+          ['foo' => 'A1', 'bar' => 'B1'],
+          ['foo' => 'A2', 'bar' => 'B2'],
         ];
 
         //Mock the application
@@ -58,17 +73,21 @@ class ApiHandlerTest extends PHPUnit_Framework_TestCase
         //Mock the config
         $config = m::mock('ConfigMock');
         $config->shouldReceive('get')->once()
-               ->with('apihandler.prefix')->andReturn('_');
+          ->with('apihandler.prefix')
+          ->andReturn('_');
+        $config->shouldReceive('get')
+          ->once()
+          ->with('apihandler.envelope')
+          ->andReturn(false);
+        $config->shouldReceive('get')
+          ->once()
+          ->with('apihandler.fulltext')->andReturn('default');
         $config->shouldReceive('get')->once()
-               ->with('apihandler.envelope')->andReturn(false);
+          ->with('apihandler.fulltext')->andReturn('native');
         $config->shouldReceive('get')->once()
-               ->with('apihandler.fulltext')->andReturn('default');
+          ->with('apihandler.fulltext_score_column')->andReturn('_score');
         $config->shouldReceive('get')->once()
-               ->with('apihandler.fulltext')->andReturn('native');
-        $config->shouldReceive('get')->once()
-               ->with('apihandler.fulltext_score_column')->andReturn('_score');
-        $config->shouldReceive('get')->once()
-               ->with('apihandler.cleanup_relations', false)->andReturn(false);
+          ->with('apihandler.cleanup_relations', false)->andReturn(false);
         Config::swap($config);
 
         $app->shouldReceive('make')->once()->andReturn($config);
@@ -76,40 +95,62 @@ class ApiHandlerTest extends PHPUnit_Framework_TestCase
         //Mock the input
         $input = m::mock('InputMock');
         $input->shouldReceive('get')->once()
-              ->with()->andReturn($this->params);
+          ->with()->andReturn($this->params);
         Request::swap($input);
 
         //Mock the response
         $response = m::mock('ResponseMock');
-        $response->shouldReceive('json')->once()->andReturn(new JsonResponse(['meta' => [], 'data' => new Collection()]));
+        $response->shouldReceive('json')
+          ->once()
+          ->andReturn(new JsonResponse([
+            'meta' => [],
+            'data' => new Collection()
+          ]));
         Response::swap($response);
 
         //Mock pdo
         $pdo = m::mock('PdoMock');
-        $pdo->shouldReceive('quote')->once()
-            ->with('Something to search')->andReturn('Something to search');
+        $pdo->shouldReceive('quote')
+          ->once()
+          ->with('Something to search')
+          ->andReturn('Something to search');
 
         //Mock the connection the same way as laravel does:
         //tests/Database/DatabaseEloquentBuilderTest.php#L1187-L1198 (mockConnectionForModel($model, $database))
         $grammar = new Illuminate\Database\Query\Grammars\MySqlGrammar;
         $processor = new Illuminate\Database\Query\Processors\MySqlProcessor;
-        $connection = m::mock('Illuminate\Database\ConnectionInterface', ['getQueryGrammar' => $grammar, 'getPostProcessor' => $processor]);
-        $connection->shouldReceive('query')->andReturnUsing(function () use ($connection, $grammar, $processor) {
-            return new BaseBuilder($connection, $grammar, $processor);
-        });
+        $connection = m::mock(ConnectionInterface::class,
+          ['getQueryGrammar' => $grammar, 'getPostProcessor' => $processor]);
+        $connection->shouldReceive('query')
+          ->andReturnUsing(function () use ($connection, $grammar, $processor) {
+              return new BaseBuilder($connection, $grammar, $processor);
+          });
         $connection->shouldReceive('getName')->andReturn('myConnection');
 
-        $connection->shouldReceive('select')->once()->with('select * from "posts"', [])->andReturn($this->data);
-        $connection->shouldReceive('select')->once()->with('select * from "posts"', [], true)->andReturn($this->data);
-        $connection->shouldReceive('raw')->once()->with('MATCH(posts.title,posts.description) AGAINST("Something to search" IN BOOLEAN MODE) as `_score`')
-                   ->andReturn($this->fulltextSelectExpression);
-        $connection->shouldReceive('getPdo')->once()->andReturn($pdo);
-        $connection->shouldReceive('query')->andReturnUsing(function () use ($connection, $grammar, $processor) {
-            return new BaseBuilder($connection, $grammar, $processor);
-        });
-        $connection->shouldReceive('getName')->andReturn('myConnection');
+        $connection->shouldReceive('select')
+          ->once()
+          ->with('select * from "posts"', [])
+          ->andReturn($this->testData);
+        $connection->shouldReceive('select')
+          ->once()
+          ->with('select * from `posts`', [], true)
+          ->andReturn($this->testData);
+        $connection->shouldReceive('raw')
+          ->once()
+          ->with('MATCH(posts.title,posts.description) AGAINST("Something to search" IN BOOLEAN MODE) as `_score`')
+          ->andReturn($this->fulltextSelectExpression);
+        $connection->shouldReceive('getPdo')
+          ->once()
+          ->andReturn($pdo);
+        $connection->shouldReceive('query')
+          ->andReturnUsing(function () use ($connection, $grammar, $processor) {
+              return new BaseBuilder($connection, $grammar, $processor);
+          });
+        $connection->shouldReceive('getName')
+          ->andReturn('myConnection');
 
-        $resolver = m::mock('Illuminate\Database\ConnectionResolverInterface', ['connection' => $connection]);
+        $resolver = m::mock('Illuminate\Database\ConnectionResolverInterface',
+          ['connection' => $connection]);
 
         Post::setConnectionResolver($resolver);
 
@@ -137,7 +178,8 @@ class ApiHandlerTest extends PHPUnit_Framework_TestCase
 
         $post = new Post();
 
-        $builder = $this->apiHandler->parseMultiple($post, ['title', 'description'], $this->params)->getBuilder();
+        $builder = $this->apiHandler->parseMultiple($post,
+          ['title', 'description'], $this->params)->getBuilder();
         $queryBuilder = $builder->getQuery();
 
         //
@@ -163,42 +205,118 @@ class ApiHandlerTest extends PHPUnit_Framework_TestCase
 
                 if ($subWheres[0]['boolean'] == 'and') {
                     //assert for title-not
-                    $this->assertEquals(['type' => 'Basic', 'column' => 'posts.title', 'operator' => '!=', 'value' => 'Example Title', 'boolean' => 'and'], $subWheres[0]);
-                    $this->assertEquals(['type' => 'Basic', 'column' => 'posts.title', 'operator' => '!=', 'value' => 'Another Title', 'boolean' => 'and'], $subWheres[1]);
+                    $this->assertEquals([
+                      'type' => 'Basic',
+                      'column' => 'posts.title',
+                      'operator' => '!=',
+                      'value' => 'Example Title',
+                      'boolean' => 'and'
+                    ], $subWheres[0]);
+                    $this->assertEquals([
+                      'type' => 'Basic',
+                      'column' => 'posts.title',
+                      'operator' => '!=',
+                      'value' => 'Another Title',
+                      'boolean' => 'and'
+                    ], $subWheres[1]);
                 } else {
                     //assert for title-lk
-                    $this->assertEquals(['type' => 'Basic', 'column' => 'posts.title', 'operator' => 'LIKE', 'value' => 'Example Title', 'boolean' => 'or'], $subWheres[0]);
-                    $this->assertEquals(['type' => 'Basic', 'column' => 'posts.title', 'operator' => 'LIKE', 'value' => 'Another Title', 'boolean' => 'or'], $subWheres[1]);
+                    $this->assertEquals([
+                      'type' => 'Basic',
+                      'column' => 'posts.title',
+                      'operator' => 'LIKE',
+                      'value' => 'Example Title',
+                      'boolean' => 'or'
+                    ], $subWheres[0]);
+                    $this->assertEquals([
+                      'type' => 'Basic',
+                      'column' => 'posts.title',
+                      'operator' => 'LIKE',
+                      'value' => 'Another Title',
+                      'boolean' => 'or'
+                    ], $subWheres[1]);
                 }
 
             }
         }
 
         //assert for title
-        $this->assertContains(['type' => 'Basic', 'column' => 'posts.title', 'operator' => '=', 'value' => 'Example Title', 'boolean' => 'and'], $wheres);
+        $this->assertContains([
+          'type' => 'Basic',
+          'column' => 'posts.title',
+          'operator' => '=',
+          'value' => 'Example Title',
+          'boolean' => 'and'
+        ], $wheres);
         //assert for title-not-lk
-        $this->assertContains(['type' => 'Basic', 'column' => 'posts.title', 'operator' => 'NOT LIKE', 'value' => 'Example Title', 'boolean' => 'and'], $wheres);
+        $this->assertContains([
+          'type' => 'Basic',
+          'column' => 'posts.title',
+          'operator' => 'NOT LIKE',
+          'value' => 'Example Title',
+          'boolean' => 'and'
+        ], $wheres);
 
         //assert for description-lk
-        $this->assertContains(['type' => 'Basic', 'column' => 'posts.description', 'operator' => 'LIKE', 'value' => '%aaa%bbb%', 'boolean' => 'and'], $wheres);
+        $this->assertContains([
+          'type' => 'Basic',
+          'column' => 'posts.description',
+          'operator' => 'LIKE',
+          'value' => '%aaa%bbb%',
+          'boolean' => 'and'
+        ], $wheres);
 
         //assert for id-min
-        $this->assertContains(['type' => 'Basic', 'column' => 'posts.id', 'operator' => '>=', 'value' => 5, 'boolean' => 'and'], $wheres);
+        $this->assertContains([
+          'type' => 'Basic',
+          'column' => 'posts.id',
+          'operator' => '>=',
+          'value' => 5,
+          'boolean' => 'and'
+        ], $wheres);
 
         //assert for id-max
-        $this->assertContains(['type' => 'Basic', 'column' => 'posts.id', 'operator' => '<=', 'value' => 6, 'boolean' => 'and'], $wheres);
+        $this->assertContains([
+          'type' => 'Basic',
+          'column' => 'posts.id',
+          'operator' => '<=',
+          'value' => 6,
+          'boolean' => 'and'
+        ], $wheres);
 
         //assert for id-gt
-        $this->assertContains(['type' => 'Basic', 'column' => 'posts.id', 'operator' => '>', 'value' => 7, 'boolean' => 'and'], $wheres);
+        $this->assertContains([
+          'type' => 'Basic',
+          'column' => 'posts.id',
+          'operator' => '>',
+          'value' => 7,
+          'boolean' => 'and'
+        ], $wheres);
 
         //assert for id-st
-        $this->assertContains(['type' => 'Basic', 'column' => 'posts.id', 'operator' => '<', 'value' => 8, 'boolean' => 'and'], $wheres);
+        $this->assertContains([
+          'type' => 'Basic',
+          'column' => 'posts.id',
+          'operator' => '<',
+          'value' => 8,
+          'boolean' => 'and'
+        ], $wheres);
 
         //assert for id-in
-        $this->assertContains(['type' => 'In', 'column' => 'posts.id', 'values' => ['1', '2'], 'boolean' => 'and'], $wheres);
+        $this->assertContains([
+          'type' => 'In',
+          'column' => 'posts.id',
+          'values' => ['1', '2'],
+          'boolean' => 'and'
+        ], $wheres);
 
         //assert for id-not-in
-        $this->assertContains(['type' => 'NotIn', 'column' => 'posts.id', 'values' => ['3', '4'], 'boolean' => 'and'], $wheres);
+        $this->assertContains([
+          'type' => 'NotIn',
+          'column' => 'posts.id',
+          'values' => ['3', '4'],
+          'boolean' => 'and'
+        ], $wheres);
 
         //
         // Limit
@@ -219,8 +337,14 @@ class ApiHandlerTest extends PHPUnit_Framework_TestCase
         //
 
         $orders = $queryBuilder->orders;
-        $this->assertContains(['column' => 'posts.title', 'direction' => 'desc'], $orders);
-        $this->assertContains(['column' => 'posts.first_name', 'direction' => 'asc'], $orders);
+        $this->assertContains([
+          'column' => 'posts.title',
+          'direction' => 'desc'
+        ], $orders);
+        $this->assertContains([
+          'column' => 'posts.first_name',
+          'direction' => 'asc'
+        ], $orders);
 
         //
         //With
@@ -255,13 +379,18 @@ class ApiHandlerTest extends PHPUnit_Framework_TestCase
         $query = $post->newQuery();
         call_user_func($eagerLoads['comments'], $query);
         $orders = $query->getQuery()->orders;
-        $this->assertContains(['column' => 'comments.created_at', 'direction' => 'asc'], $orders);
+        $this->assertContains([
+          'column' => 'comments.created_at',
+          'direction' => 'asc'
+        ], $orders);
 
         //
         // Default fulltext search
         //
 
-        $builder = $this->apiHandler->parseMultiple($post, ['title', 'description'], ['_q' => 'Something to search'])->getBuilder();
+        $builder = $this->apiHandler->parseMultiple($post,
+          ['title', 'description'], ['_q' => 'Something to search'])
+          ->getBuilder();
         $queryBuilder = $builder->getQuery();
 
         $wheres = $queryBuilder->wheres;
@@ -272,12 +401,48 @@ class ApiHandlerTest extends PHPUnit_Framework_TestCase
                 $query = $where['query'];
                 $subWheres = $query->wheres;
 
-                $this->assertEquals(['type' => 'Basic', 'column' => 'posts.title', 'operator' => 'LIKE', 'value' => '%Something%', 'boolean' => 'or'], $subWheres[0]);
-                $this->assertEquals(['type' => 'Basic', 'column' => 'posts.title', 'operator' => 'LIKE', 'value' => '%to%', 'boolean' => 'or'], $subWheres[1]);
-                $this->assertEquals(['type' => 'Basic', 'column' => 'posts.title', 'operator' => 'LIKE', 'value' => '%search%', 'boolean' => 'or'], $subWheres[2]);
-                $this->assertEquals(['type' => 'Basic', 'column' => 'posts.description', 'operator' => 'LIKE', 'value' => '%Something%', 'boolean' => 'or'], $subWheres[3]);
-                $this->assertEquals(['type' => 'Basic', 'column' => 'posts.description', 'operator' => 'LIKE', 'value' => '%to%', 'boolean' => 'or'], $subWheres[4]);
-                $this->assertEquals(['type' => 'Basic', 'column' => 'posts.description', 'operator' => 'LIKE', 'value' => '%search%', 'boolean' => 'or'], $subWheres[5]);
+                $this->assertEquals([
+                  'type' => 'Basic',
+                  'column' => 'posts.title',
+                  'operator' => 'LIKE',
+                  'value' => '%Something%',
+                  'boolean' => 'or'
+                ], $subWheres[0]);
+                $this->assertEquals([
+                  'type' => 'Basic',
+                  'column' => 'posts.title',
+                  'operator' => 'LIKE',
+                  'value' => '%to%',
+                  'boolean' => 'or'
+                ], $subWheres[1]);
+                $this->assertEquals([
+                  'type' => 'Basic',
+                  'column' => 'posts.title',
+                  'operator' => 'LIKE',
+                  'value' => '%search%',
+                  'boolean' => 'or'
+                ], $subWheres[2]);
+                $this->assertEquals([
+                  'type' => 'Basic',
+                  'column' => 'posts.description',
+                  'operator' => 'LIKE',
+                  'value' => '%Something%',
+                  'boolean' => 'or'
+                ], $subWheres[3]);
+                $this->assertEquals([
+                  'type' => 'Basic',
+                  'column' => 'posts.description',
+                  'operator' => 'LIKE',
+                  'value' => '%to%',
+                  'boolean' => 'or'
+                ], $subWheres[4]);
+                $this->assertEquals([
+                  'type' => 'Basic',
+                  'column' => 'posts.description',
+                  'operator' => 'LIKE',
+                  'value' => '%search%',
+                  'boolean' => 'or'
+                ], $subWheres[5]);
             }
         }
 
@@ -285,16 +450,23 @@ class ApiHandlerTest extends PHPUnit_Framework_TestCase
         // Native fulltext search
         //
 
-        $builder = $this->apiHandler->parseMultiple($post, ['title', 'description'], ['_q' => 'Something to search', '_sort' => '_score'])->getBuilder();
+        $builder = $this->apiHandler->parseMultiple($post,
+          ['title', 'description'],
+          ['_q' => 'Something to search', '_sort' => '_score'])->getBuilder();
         $queryBuilder = $builder->getQuery();
 
         //Test alias column in sort
         $orders = $queryBuilder->orders;
-        $this->assertContains(['column' => '_score', 'direction' => 'asc'], $orders);
+        $this->assertContains(['column' => '_score', 'direction' => 'asc'],
+          $orders);
 
         //Test the where
         $wheres = $queryBuilder->wheres;
-        $this->assertEquals(['type' => 'raw', 'sql' => 'MATCH(posts.title,posts.description) AGAINST("Something to search" IN BOOLEAN MODE)', 'boolean' => 'and'], $wheres[0]);
+        $this->assertEquals([
+          'type' => 'raw',
+          'sql' => 'MATCH(posts.title,posts.description) AGAINST("Something to search" IN BOOLEAN MODE)',
+          'boolean' => 'and'
+        ], $wheres[0]);
 
         //Test the select
         $columns = $queryBuilder->columns;
@@ -306,7 +478,9 @@ class ApiHandlerTest extends PHPUnit_Framework_TestCase
     {
         $post = new Post();
 
-        $response = $this->apiHandler->parseMultiple($post, ['title', 'description'], ['_config' => 'response-envelope'])->getResponse();
+        $response = $this->apiHandler->parseMultiple($post,
+          ['title', 'description'], ['_config' => 'response-envelope'])
+          ->getResponse();
         $data = $response->getData();
 
         $this->assertInstanceOf('Illuminate\Http\JsonResponse', $response);
